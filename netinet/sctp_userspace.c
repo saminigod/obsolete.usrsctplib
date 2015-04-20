@@ -63,7 +63,7 @@ sctp_userspace_get_mtu_from_ifn(uint32_t if_index, int af)
 }
 #endif
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(WINRT)
 int
 sctp_userspace_get_mtu_from_ifn(uint32_t if_index, int af)
 {
@@ -91,7 +91,9 @@ sctp_userspace_get_mtu_from_ifn(uint32_t if_index, int af)
 	}
 	return (0);
 }
+#endif
 
+#ifdef _WIN32
 void
 getwintimeofday(struct timeval *tv)
 {
@@ -101,7 +103,9 @@ getwintimeofday(struct timeval *tv)
 	tv->tv_sec = (long)tb.time;
 	tv->tv_usec = (long)(tb.millitm) * 1000L;
 }
+#endif
 
+#if defined(_WIN32) && !defined(WINRT)
 int
 Win_getifaddrs(struct ifaddrs** interfaces)
 {
