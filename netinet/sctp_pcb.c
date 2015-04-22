@@ -73,6 +73,10 @@ __FBSDID("$FreeBSD: head/sys/netinet/sctp_pcb.c 277031 2015-01-11 21:55:30Z tuex
 #include <user_socketvar.h>
 #endif
 
+#if defined WINRT
+#define WaitForSingleObject(a, b) WaitForSingleObjectEx(a, b, FALSE)
+#endif
+
 #if defined(__APPLE__)
 #define APPLE_FILE_NO 4
 #endif

@@ -55,7 +55,7 @@ sctp_userspace_get_mtu_from_ifn(uint32_t if_index, int af)
 }
 #endif
 
-#if defined(__Userspace_os_NaCl)
+#if defined(__Userspace_os_NaCl) || defined(WINRT)
 int
 sctp_userspace_get_mtu_from_ifn(uint32_t if_index, int af)
 {
