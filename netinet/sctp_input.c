@@ -3642,7 +3642,8 @@ sctp_find_stream_reset(struct sctp_tcb *stcb, uint32_t seq, struct sctp_tmit_chu
 	clen = chk->send_size;
 	ch = mtod(chk->data, struct sctp_chunkhdr *);
 	r = (struct sctp_stream_reset_request *)(ch + 1);
-	if (ntohl(r->request_seq) == seq) {
+    if (ntohl(r->request_seq) == seq &&
+        ntohs(r->ph.param_type) != SCTP_STR_RESET_RESPONSE) {
 		/* found it */
 		return (r);
 	}
@@ -3650,7 +3651,8 @@ sctp_find_stream_reset(struct sctp_tcb *stcb, uint32_t seq, struct sctp_tmit_chu
 	if (clen > (len + (int)sizeof(struct sctp_chunkhdr))) {
 		/* move to the next one, there can only be a max of two */
 		r = (struct sctp_stream_reset_request *)((caddr_t)r + len);
-		if (ntohl(r->request_seq) == seq) {
+		if (ntohl(r->request_seq) == seq &&
+            ntohs(r->ph.param_type) != SCTP_STR_RESET_RESPONSE) {
 			return (r);
 		}
 	}
