@@ -32,7 +32,7 @@
 
 #ifdef __FreeBSD__
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/sys/netinet/sctp_pcb.c 280459 2015-03-24 21:12:45Z tuexen $");
+__FBSDID("$FreeBSD: head/sys/netinet/sctp_pcb.c 291904 2015-12-06 16:17:57Z tuexen $");
 #endif
 
 #include <netinet/sctp_os.h>
@@ -1289,7 +1289,7 @@ sctp_tcb_special_locate(struct sctp_inpcb **inp_p, struct sockaddr *from,
 			LIST_FOREACH(laddr, &inp->sctp_addr_list, sctp_nxt_addr) {
 
 				if (laddr->ifa == NULL) {
-					SCTPDBG(SCTP_DEBUG_PCB1, "%s: NULL ifa\n", __FUNCTION__);
+					SCTPDBG(SCTP_DEBUG_PCB1, "%s: NULL ifa\n", __func__);
 					continue;
 				}
 				if (laddr->ifa->localifa_flags & SCTP_BEING_DELETED) {
@@ -2088,7 +2088,7 @@ sctp_endpoint_probe(struct sockaddr *nam, struct sctppcbhead *head,
 		LIST_FOREACH(laddr, &inp->sctp_addr_list, sctp_nxt_addr) {
 			if (laddr->ifa == NULL) {
 				SCTPDBG(SCTP_DEBUG_PCB1, "%s: NULL ifa\n",
-					__FUNCTION__);
+					__func__);
 				continue;
 			}
 			SCTPDBG(SCTP_DEBUG_PCB1, "Ok laddr->ifa:%p is possible, ",
@@ -2697,7 +2697,7 @@ sctp_findassociation_ep_asconf(struct mbuf *m, int offset,
 				   &parm_buf, sizeof(struct sctp_paramhdr));
 	if (phdr == NULL) {
 		SCTPDBG(SCTP_DEBUG_INPUT3, "%s: failed to get asconf lookup addr\n",
-			__FUNCTION__);
+			__func__);
 		return NULL;
 	}
 	ptype = (int)((uint32_t) ntohs(phdr->param_type));
@@ -2717,7 +2717,7 @@ sctp_findassociation_ep_asconf(struct mbuf *m, int offset,
 								       &p6_buf.ph, sizeof(*p6));
 		if (p6 == NULL) {
 			SCTPDBG(SCTP_DEBUG_INPUT3, "%s: failed to get asconf v6 lookup addr\n",
-				__FUNCTION__);
+				__func__);
 			return (NULL);
 		}
 		sin6 = &remote_store.sin6;
@@ -2746,7 +2746,7 @@ sctp_findassociation_ep_asconf(struct mbuf *m, int offset,
 								       &p4_buf.ph, sizeof(*p4));
 		if (p4 == NULL) {
 			SCTPDBG(SCTP_DEBUG_INPUT3, "%s: failed to get asconf v4 lookup addr\n",
-				__FUNCTION__);
+				__func__);
 			return (NULL);
 		}
 		sin = &remote_store.sin;
@@ -2850,6 +2850,11 @@ sctp_inpcb_alloc(struct socket *so, uint32_t vrf_id)
 	inp->reconfig_supported = (uint8_t)SCTP_BASE_SYSCTL(sctp_reconfig_enable);
 	inp->nrsack_supported = (uint8_t)SCTP_BASE_SYSCTL(sctp_nrsack_enable);
 	inp->pktdrop_supported = (uint8_t)SCTP_BASE_SYSCTL(sctp_pktdrop_enable);
+#if defined(__FreeBSD__)
+	inp->fibnum = so->so_fibnum;
+#else
+	inp->fibnum = 0;
+#endif
 #if defined(__Userspace__)
 	inp->ulp_info = NULL;
 	inp->recv_callback = NULL;
@@ -2868,16 +2873,8 @@ sctp_inpcb_alloc(struct socket *so, uint32_t vrf_id)
 	}
 #ifdef IPSEC
 #if !(defined(__APPLE__))
-	{
-		struct inpcbpolicy *pcb_sp = NULL;
-
-		error = ipsec_init_policy(so, &pcb_sp);
-		/* Arrange to share the policy */
-		inp->ip_inp.inp.inp_sp = pcb_sp;
-		((struct in6pcb *)(&inp->ip_inp.inp))->in6p_sp = pcb_sp;
-	}
+	error = ipsec_init_policy(so, &inp->ip_inp.inp.inp_sp);
 #else
-	/* not sure what to do for openbsd here */
 	error = 0;
 #endif
 	if (error != 0) {
@@ -2931,6 +2928,9 @@ sctp_inpcb_alloc(struct socket *so, uint32_t vrf_id)
 		so->so_pcb = NULL;
 #if defined(__FreeBSD__)
 		crfree(inp->ip_inp.inp.inp_cred);
+#ifdef IPSEC
+		ipsec_delete_pcbpolicy(&inp->ip_inp.inp);
+#endif
 #endif
 		SCTP_ZONE_FREE(SCTP_BASE_INFO(ipi_zone_ep), inp);
 		return (EOPNOTSUPP);
@@ -2953,6 +2953,9 @@ sctp_inpcb_alloc(struct socket *so, uint32_t vrf_id)
 		so->so_pcb = NULL;
 #if defined(__FreeBSD__)
 		crfree(inp->ip_inp.inp.inp_cred);
+#ifdef IPSEC
+		ipsec_delete_pcbpolicy(&inp->ip_inp.inp);
+#endif
 #endif
 		SCTP_ZONE_FREE(SCTP_BASE_INFO(ipi_zone_ep), inp);
 		return (ENOBUFS);
@@ -2967,6 +2970,9 @@ sctp_inpcb_alloc(struct socket *so, uint32_t vrf_id)
 		SCTP_HASH_FREE(inp->sctp_tcbhash, inp->sctp_hashmark);
 #if defined(__FreeBSD__)
 		crfree(inp->ip_inp.inp.inp_cred);
+#ifdef IPSEC
+		ipsec_delete_pcbpolicy(&inp->ip_inp.inp);
+#endif
 #endif
 		SCTP_ZONE_FREE(SCTP_BASE_INFO(ipi_zone_ep), inp);
 		return (ENOBUFS);
@@ -2988,6 +2994,9 @@ sctp_inpcb_alloc(struct socket *so, uint32_t vrf_id)
 		so->so_pcb = NULL;
 #if defined(__FreeBSD__)
 		crfree(inp->ip_inp.inp.inp_cred);
+#ifdef IPSEC
+		ipsec_delete_pcbpolicy(&inp->ip_inp.inp);
+#endif
 #endif
 		SCTP_ZONE_FREE(SCTP_BASE_INFO(ipi_zone_ep), inp);
 		SCTP_UNLOCK_EXC(SCTP_BASE_INFO(sctbinfo).ipi_lock);
@@ -3930,7 +3939,7 @@ sctp_inpcb_free(struct sctp_inpcb *inp, int immediate, int from)
 	}
 	/* First time through we have the socket lock, after that no more. */
 	sctp_timer_stop(SCTP_TIMER_TYPE_NEWCOOKIE, inp, NULL, NULL,
-			SCTP_FROM_SCTP_PCB+SCTP_LOC_1);
+			SCTP_FROM_SCTP_PCB + SCTP_LOC_1);
 
 	if (inp->control) {
 		sctp_m_freem(inp->control);
@@ -3974,7 +3983,7 @@ sctp_inpcb_free(struct sctp_inpcb *inp, int immediate, int from)
 				 */
 				/* Just abandon things in the front states */
 				if (sctp_free_assoc(inp, asoc, SCTP_PCBFREE_NOFORCE,
-						   SCTP_FROM_SCTP_PCB+SCTP_LOC_2) == 0) {
+						   SCTP_FROM_SCTP_PCB + SCTP_LOC_2) == 0) {
 					cnt_in_sd++;
 				}
 				continue;
@@ -3990,7 +3999,7 @@ sctp_inpcb_free(struct sctp_inpcb *inp, int immediate, int from)
 				struct mbuf *op_err;
 
 				op_err = sctp_generate_cause(SCTP_CAUSE_USER_INITIATED_ABT, "");
-				asoc->sctp_ep->last_abort_code = SCTP_FROM_SCTP_PCB+SCTP_LOC_3;
+				asoc->sctp_ep->last_abort_code = SCTP_FROM_SCTP_PCB + SCTP_LOC_3;
 				sctp_send_abort_tcb(asoc, op_err, SCTP_SO_LOCKED);
 				SCTP_STAT_INCR_COUNTER32(sctps_aborted);
 				if ((SCTP_GET_STATE(&asoc->asoc) == SCTP_STATE_OPEN) ||
@@ -3998,7 +4007,7 @@ sctp_inpcb_free(struct sctp_inpcb *inp, int immediate, int from)
 					SCTP_STAT_DECR_GAUGE32(sctps_currestab);
 				}
 				if (sctp_free_assoc(inp, asoc,
-						    SCTP_PCBFREE_NOFORCE, SCTP_FROM_SCTP_PCB+SCTP_LOC_4) == 0) {
+						    SCTP_PCBFREE_NOFORCE, SCTP_FROM_SCTP_PCB + SCTP_LOC_4) == 0) {
 					cnt_in_sd++;
 				}
 				continue;
@@ -4060,7 +4069,7 @@ sctp_inpcb_free(struct sctp_inpcb *inp, int immediate, int from)
 					struct mbuf *op_err;
 				abort_anyway:
 					op_err = sctp_generate_cause(SCTP_CAUSE_USER_INITIATED_ABT, "");
-					asoc->sctp_ep->last_abort_code = SCTP_FROM_SCTP_PCB+SCTP_LOC_5;
+					asoc->sctp_ep->last_abort_code = SCTP_FROM_SCTP_PCB + SCTP_LOC_5;
 					sctp_send_abort_tcb(asoc, op_err, SCTP_SO_LOCKED);
 					SCTP_STAT_INCR_COUNTER32(sctps_aborted);
 					if ((SCTP_GET_STATE(&asoc->asoc) == SCTP_STATE_OPEN) ||
@@ -4069,7 +4078,7 @@ sctp_inpcb_free(struct sctp_inpcb *inp, int immediate, int from)
 					}
 					if (sctp_free_assoc(inp, asoc,
 							    SCTP_PCBFREE_NOFORCE,
-							    SCTP_FROM_SCTP_PCB+SCTP_LOC_6) == 0) {
+							    SCTP_FROM_SCTP_PCB + SCTP_LOC_6) == 0) {
 						cnt_in_sd++;
 					}
 					continue;
@@ -4127,7 +4136,7 @@ sctp_inpcb_free(struct sctp_inpcb *inp, int immediate, int from)
 			struct mbuf *op_err;
 
 			op_err = sctp_generate_cause(SCTP_CAUSE_USER_INITIATED_ABT, "");
-			asoc->sctp_ep->last_abort_code = SCTP_FROM_SCTP_PCB+SCTP_LOC_7;
+			asoc->sctp_ep->last_abort_code = SCTP_FROM_SCTP_PCB + SCTP_LOC_7;
 			sctp_send_abort_tcb(asoc, op_err, SCTP_SO_LOCKED);
 			SCTP_STAT_INCR_COUNTER32(sctps_aborted);
 		} else if (asoc->asoc.state & SCTP_STATE_ABOUT_TO_BE_FREED) {
@@ -4139,7 +4148,8 @@ sctp_inpcb_free(struct sctp_inpcb *inp, int immediate, int from)
 		    (SCTP_GET_STATE(&asoc->asoc) == SCTP_STATE_SHUTDOWN_RECEIVED)) {
 			SCTP_STAT_DECR_GAUGE32(sctps_currestab);
 		}
-		if (sctp_free_assoc(inp, asoc, SCTP_PCBFREE_FORCE, SCTP_FROM_SCTP_PCB+SCTP_LOC_8) == 0) {
+		if (sctp_free_assoc(inp, asoc, SCTP_PCBFREE_FORCE,
+		                    SCTP_FROM_SCTP_PCB + SCTP_LOC_8) == 0) {
 			cnt++;
 		}
 	}
@@ -4250,13 +4260,9 @@ sctp_inpcb_free(struct sctp_inpcb *inp, int immediate, int from)
 	 * macro here since le_next will get freed as part of the
 	 * sctp_free_assoc() call.
 	 */
-	if (so) {
 #ifdef IPSEC
-		ipsec_delete_pcbpolicy(ip_pcb);
-#endif				/* IPSEC */
-
-		/* Unlocks not needed since the socket is gone now */
-	}
+	ipsec_delete_pcbpolicy(ip_pcb);
+#endif
 #ifndef __Panda__
 	if (ip_pcb->inp_options) {
 		(void)sctp_m_free(ip_pcb->inp_options);
@@ -4457,13 +4463,9 @@ sctp_add_remote_addr(struct sctp_tcb *stcb, struct sockaddr *newaddr,
 		sin->sin_len = sizeof(struct sockaddr_in);
 #endif
 		if (set_scope) {
-#ifdef SCTP_DONT_DO_PRIVADDR_SCOPE
-			stcb->asoc.scope.ipv4_local_scope = 1;
-#else
 			if (IN4_ISPRIVATE_ADDRESS(&sin->sin_addr)) {
 				stcb->asoc.scope.ipv4_local_scope = 1;
 			}
-#endif				/* SCTP_DONT_DO_PRIVADDR_SCOPE */
 		} else {
 			/* Validate the address is in scope */
 			if ((IN4_ISPRIVATE_ADDRESS(&sin->sin_addr)) &&
@@ -4662,7 +4664,9 @@ sctp_add_remote_addr(struct sctp_tcb *stcb, struct sockaddr *newaddr,
 	}
 #endif /* SCTP_EMBEDDED_V6_SCOPE */
 #endif
-	SCTP_RTALLOC((sctp_route_t *)&net->ro, stcb->asoc.vrf_id);
+	SCTP_RTALLOC((sctp_route_t *)&net->ro,
+	             stcb->asoc.vrf_id,
+	             stcb->sctp_ep->fibnum);
 
 #if defined(__Userspace__)
 	net->src_addr_selected = 0;
@@ -4897,7 +4901,8 @@ sctp_aloc_a_assoc_id(struct sctp_inpcb *inp, struct sctp_tcb *stcb)
  */
 struct sctp_tcb *
 sctp_aloc_assoc(struct sctp_inpcb *inp, struct sockaddr *firstaddr,
-		int *error, uint32_t override_tag, uint32_t vrf_id,
+                int *error, uint32_t override_tag, uint32_t vrf_id,
+                uint16_t o_streams,
 #if defined(__FreeBSD__) && __FreeBSD_version >= 500000
 		struct thread *p
 #elif defined(__Windows__)
@@ -5093,7 +5098,7 @@ sctp_aloc_assoc(struct sctp_inpcb *inp, struct sockaddr *firstaddr,
 	/* setup back pointer's */
 	stcb->sctp_ep = inp;
 	stcb->sctp_socket = inp->sctp_socket;
-	if ((err = sctp_init_asoc(inp, stcb, override_tag, vrf_id))) {
+	if ((err = sctp_init_asoc(inp, stcb, override_tag, vrf_id, o_streams))) {
 		/* failed */
 		SCTP_TCB_LOCK_DESTROY(stcb);
 		SCTP_TCB_SEND_LOCK_DESTROY(stcb);
@@ -6102,7 +6107,7 @@ sctp_update_ep_vflag(struct sctp_inpcb *inp)
 	LIST_FOREACH(laddr, &inp->sctp_addr_list, sctp_nxt_addr) {
 		if (laddr->ifa == NULL) {
 			SCTPDBG(SCTP_DEBUG_PCB1, "%s: NULL ifa\n",
-				__FUNCTION__);
+				__func__);
 			continue;
 		}
 
@@ -6655,6 +6660,14 @@ sctp_pcb_init()
 	}
 	SCTP_BASE_VAR(sctp_pcb_initialized) = 1;
 
+#if defined(SCTP_PROCESS_LEVEL_LOCKS)
+#if !defined(__Userspace_os_Windows)
+	pthread_mutexattr_init(&SCTP_BASE_VAR(mtx_attr));
+#ifdef INVARIANTS
+	pthread_mutexattr_settype(&SCTP_BASE_VAR(mtx_attr), PTHREAD_MUTEX_ERRORCHECK);
+#endif
+#endif
+#endif
 #if defined(SCTP_LOCAL_TRACE_BUF)
 #if defined(__Windows__)
 	if (SCTP_BASE_SYSCTL(sctp_log) != NULL) {
@@ -6867,7 +6880,7 @@ sctp_pcb_finish(void)
 	struct sctp_laddr *wi, *nwi;
 	int i;
 	struct sctp_iterator *it, *nit;
-	
+
 #if !defined(__FreeBSD__)
 	/* Notify the iterator to exit. */
 	SCTP_IPI_ITERATOR_WQ_LOCK();
@@ -6918,6 +6931,7 @@ sctp_pcb_finish(void)
 	DeleteConditionVariable(&sctp_it_ctl.iterator_wakeup);
 #else
 	pthread_cond_destroy(&sctp_it_ctl.iterator_wakeup);
+	pthread_mutexattr_destroy(&SCTP_BASE_VAR(mtx_attr));
 #endif
 #endif
 	/* In FreeBSD the iterator thread never exits
@@ -7287,9 +7301,17 @@ sctp_load_addresses_from_init(struct sctp_tcb *stcb, struct mbuf *m,
 					 */
 					if (stcb_tmp) {
 						if (SCTP_GET_STATE(&stcb_tmp->asoc) & SCTP_STATE_COOKIE_WAIT) {
+							struct mbuf *op_err;
+							char msg[SCTP_DIAG_INFO_LEN];
+
 							/* in setup state we abort this guy */
+							snprintf(msg, sizeof(msg),
+							         "%s:%d at %s", __FILE__, __LINE__, __func__);
+							op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
+							         msg);
 							sctp_abort_an_association(stcb_tmp->sctp_ep,
-										  stcb_tmp, NULL, SCTP_SO_NOT_LOCKED);
+										  stcb_tmp, op_err,
+							                          SCTP_SO_NOT_LOCKED);
 							goto add_it_now;
 						}
 						SCTP_TCB_UNLOCK(stcb_tmp);
@@ -7371,15 +7393,23 @@ sctp_load_addresses_from_init(struct sctp_tcb *stcb, struct mbuf *m,
 					 * strange, address is in another
 					 * assoc? straighten out locks.
 					 */
-					if (stcb_tmp)
+					if (stcb_tmp) {
 						if (SCTP_GET_STATE(&stcb_tmp->asoc) & SCTP_STATE_COOKIE_WAIT) {
+							struct mbuf *op_err;
+							char msg[SCTP_DIAG_INFO_LEN];
+
 							/* in setup state we abort this guy */
+							snprintf(msg, sizeof(msg),
+							         "%s:%d at %s", __FILE__, __LINE__, __func__);
+							op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
+							         msg);
 							sctp_abort_an_association(stcb_tmp->sctp_ep,
-										  stcb_tmp, NULL, SCTP_SO_NOT_LOCKED);
+										  stcb_tmp, op_err,
+							                          SCTP_SO_NOT_LOCKED);
 							goto add_it_now6;
 						}
-					SCTP_TCB_UNLOCK(stcb_tmp);
-
+						SCTP_TCB_UNLOCK(stcb_tmp);
+					}
 					if (stcb->asoc.state == 0) {
 						/* the assoc was freed? */
 						return (-21);

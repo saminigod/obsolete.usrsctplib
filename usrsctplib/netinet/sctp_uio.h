@@ -32,7 +32,7 @@
 
 #ifdef __FreeBSD__
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/sys/netinet/sctp_uio.h 269945 2014-08-13 15:50:16Z tuexen $");
+__FBSDID("$FreeBSD: head/sys/netinet/sctp_uio.h 290444 2015-11-06 14:00:26Z tuexen $");
 #endif
 
 #ifndef _NETINET_SCTP_UIO_H_
@@ -164,19 +164,25 @@ struct sctp_extrcvinfo {
 #endif
 	uint32_t sinfo_ppid;
 	uint32_t sinfo_context;
-	uint32_t sinfo_timetolive;
+	uint32_t sinfo_timetolive; /* should have been sinfo_pr_value */
 	uint32_t sinfo_tsn;
 	uint32_t sinfo_cumtsn;
 	sctp_assoc_t sinfo_assoc_id;
-	uint16_t sreinfo_next_flags;
-	uint16_t sreinfo_next_stream;
-	uint32_t sreinfo_next_aid;
-	uint32_t sreinfo_next_length;
-	uint32_t sreinfo_next_ppid;
+	uint16_t serinfo_next_flags;
+	uint16_t serinfo_next_stream;
+	uint32_t serinfo_next_aid;
+	uint32_t serinfo_next_length;
+	uint32_t serinfo_next_ppid;
 	uint16_t sinfo_keynumber;
 	uint16_t sinfo_keynumber_valid;
 	uint8_t  __reserve_pad[SCTP_ALIGN_RESV_PAD_SHORT];
 };
+#define sinfo_pr_value sinfo_timetolive
+#define sreinfo_next_flags serinfo_next_flags
+#define sreinfo_next_stream serinfo_next_stream
+#define sreinfo_next_aid serinfo_next_aid
+#define sreinfo_next_length serinfo_next_length
+#define sreinfo_next_ppid serinfo_next_ppid
 
 struct sctp_sndinfo {
 	uint16_t snd_sid;
@@ -1197,10 +1203,19 @@ struct xsctp_inpcb {
 #if defined(__Windows__)
 	uint16_t padding;
 #endif
+#if !(defined(__FreeBSD__) && (__FreeBSD_version < 1001517))
+	void *socket;
+#endif
 #if defined(__FreeBSD__) && __FreeBSD_version < 1000048
 	uint32_t extra_padding[32]; /* future */
-#else
+#elif defined(__FreeBSD__) && (__FreeBSD_version < 1001517)
 	uint32_t extra_padding[31]; /* future */
+#else
+#if defined(__LP64__)
+	uint32_t extra_padding[29]; /* future */
+#else
+	uint32_t extra_padding[30]; /* future */
+#endif
 #endif
 };
 
@@ -1270,12 +1285,14 @@ struct xsctp_raddr {
 #if __FreeBSD_version >= 800000
 	uint32_t rtt;
 	uint32_t heartbeat_interval;
-	uint32_t extra_padding[31];              /* future */
+	uint32_t ssthresh;
+	uint32_t extra_padding[30];              /* future */
 #endif
 #else
 	uint32_t rtt;
 	uint32_t heartbeat_interval;
-	uint32_t extra_padding[31];              /* future */
+	uint32_t ssthresh;
+	uint32_t extra_padding[30];              /* future */
 #endif
 };
 

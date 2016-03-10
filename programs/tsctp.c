@@ -65,6 +65,7 @@ uint32_t optval = 1;
 struct socket *psock = NULL;
 
 static struct timeval start_time;
+unsigned int runtime = 0;
 static unsigned long messages = 0;
 static unsigned int first_length = 0;
 static unsigned long long sum = 0;
@@ -91,8 +92,11 @@ char Usage[] =
 "        -E             local UDP encapsulation port (default 9899)\n"
 "        -f             fragmentation point\n"
 "        -l             size of send/receive buffer\n"
+"        -L             bind to local IP (default INADDR_ANY)\n"
 "        -n             number of messages sent (0 means infinite)/received\n"
 "        -D             turns Nagle off\n"
+"        -R             socket recv buffer\n"
+"        -S             socket send buffer\n"
 "        -T             time to send messages\n"
 "        -u             use unordered user messages\n"
 "        -U             remote UDP encapsulation port\n"
@@ -125,7 +129,11 @@ gettimeofday(struct timeval *tv, void *ignore)
 }
 #endif
 
-static void*
+#ifdef _WIN32
+static DWORD WINAPI
+#else
+static void *
+#endif
 handle_connection(void *arg)
 {
 	ssize_t n;
@@ -198,7 +206,7 @@ handle_connection(void *arg)
 		infotype = 0;
 		memset(&rn, 0, sizeof(struct sctp_recvv_rn));
 		n = usrsctp_recvv(conn_sock, (void *) buf, BUFFERSIZE, (struct sockaddr *) &addr, &len, (void *)&rn,
-	                      &infolen, &infotype, &flags);
+		                  &infolen, &infotype, &flags);
 	}
 	if (n < 0)
 		perror("sctp_recvv");
@@ -210,14 +218,28 @@ handle_connection(void *arg)
 	fflush(stdout);
 	usrsctp_close(conn_sock);
 	free(buf);
-	return NULL;
+#ifdef _WIN32
+	return 0;
+#else
+	return (NULL);
+#endif
 }
 
 static int
 send_cb(struct socket *sock, uint32_t sb_free) {
 	struct sctp_sndinfo sndinfo;
-	/*struct sctp_prinfo prinfo;
-	struct sctp_sendv_spa spa;*/
+
+	if ((messages == 0) & verbose) {
+		printf("Start sending ");
+		if (number_of_messages > 0) {
+			printf("%ld messages ", (long)number_of_messages);
+		}
+		if (runtime > 0) {
+			printf("for %u seconds ...", runtime);
+		}
+		printf("\n");
+		fflush(stdout);
+	}
 
 	sndinfo.snd_sid = 0;
 	sndinfo.snd_flags = 0;
@@ -228,24 +250,22 @@ send_cb(struct socket *sock, uint32_t sb_free) {
 	sndinfo.snd_context = 0;
 	sndinfo.snd_assoc_id = 0;
 
-	/*prinfo.pr_policy = SCTP_PR_SCTP_RTX;
-	prinfo.pr_value = 2;
-	spa.sendv_sndinfo = sndinfo;
-	spa.sendv_prinfo = prinfo;
-	spa.sendv_flags = SCTP_SEND_SNDINFO_VALID | SCTP_SEND_PRINFO_VALID;*/
-
 	while (!done && ((number_of_messages == 0) || (messages < (number_of_messages - 1)))) {
-		if (very_verbose)
+		if (very_verbose) {
 			printf("Sending message number %lu.\n", messages + 1);
+		}
 
 		if (usrsctp_sendv(psock, buffer, length,
 		                  (struct sockaddr *) &remote_addr, 1,
 		                  (void *)&sndinfo, (socklen_t)sizeof(struct sctp_sndinfo), SCTP_SENDV_SNDINFO,
 		                  0) < 0) {
 			if (errno != EWOULDBLOCK && errno != EAGAIN) {
-				perror("usrsctp_sendmsg (cb) returned < 0");
+				perror("usrsctp_sendv (cb)");
 				exit(1);
 			} else {
+				if (very_verbose){
+					printf("EWOULDBLOCK or EAGAIN for message number %lu - will retry\n", messages + 1);
+				}
 				/* send until EWOULDBLOCK then exit callback. */
 				return (1);
 			}
@@ -261,9 +281,12 @@ send_cb(struct socket *sock, uint32_t sb_free) {
 		                  (void *)&sndinfo, (socklen_t)sizeof(struct sctp_sndinfo), SCTP_SENDV_SNDINFO,
 		                  0) < 0) {
 			if (errno != EWOULDBLOCK && errno != EAGAIN) {
-				perror("usrsctp_sendmsg (cb) returned < 0");
+				perror("usrsctp_sendv (cb)");
 				exit(1);
 			} else {
+				if (very_verbose){
+					printf("EWOULDBLOCK or EAGAIN for final message number %lu - will retry\n", messages + 1);
+				}
 				/* send until EWOULDBLOCK then exit callback. */
 				return (1);
 			}
@@ -276,7 +299,7 @@ send_cb(struct socket *sock, uint32_t sb_free) {
 }
 
 static int
-receive_cb(struct socket *sock, union sctp_sockstore addr, void *data,
+server_receive_cb(struct socket *sock, union sctp_sockstore addr, void *data,
            size_t datalen, struct sctp_rcvinfo rcv, int flags, void *ulp_info)
 {
 	struct timeval now, diff_time;
@@ -301,7 +324,15 @@ receive_cb(struct socket *sock, union sctp_sockstore addr, void *data,
 	sum += datalen;
 	messages++;
 
-  free(data);
+	free(data);
+	return (1);
+}
+
+static int
+client_receive_cb(struct socket *sock, union sctp_sockstore addr, void *data,
+           size_t datalen, struct sctp_rcvinfo rcv, int flags, void *ulp_info)
+{
+	free(data);
 	return (1);
 }
 
@@ -325,6 +356,8 @@ int main(int argc, char **argv)
 	struct timeval start_time, now, diff_time;
 	int client;
 	uint16_t local_port, remote_port, port, local_udp_port, remote_udp_port;
+	int rcvbufsize=0, sndbufsize=0, myrcvbufsize, mysndbufsize;
+	socklen_t intlen;
 	double seconds;
 	double throughput;
 	int nodelay = 0;
@@ -332,20 +365,19 @@ int main(int argc, char **argv)
 	struct sctp_udpencaps encaps;
 	struct sctp_sndinfo sndinfo;
 #ifdef _WIN32
+	unsigned long srcAddr;
 	HANDLE tid;
 #else
+	in_addr_t srcAddr;
 	pthread_t tid;
 #endif
 	int fragpoint = 0;
-	unsigned int runtime = 0;
 	struct sctp_setadaptation ind = {0};
 #ifdef _WIN32
 	char *opt;
 	int optind;
 #endif
 	unordered = 0;
-	/*struct sctp_prinfo prinfo;
-	struct sctp_sendv_spa spa;*/
 
 	length = DEFAULT_LENGTH;
 	number_of_messages = DEFAULT_NUMBER_OF_MESSAGES;
@@ -354,12 +386,13 @@ int main(int argc, char **argv)
 	local_udp_port = 9899;
 	verbose = 0;
 	very_verbose = 0;
+	srcAddr = htonl(INADDR_ANY);
 
 	memset((void *) &remote_addr, 0, sizeof(struct sockaddr_in));
 	memset((void *) &local_addr, 0, sizeof(struct sockaddr_in));
 
 #ifndef _WIN32
-	while ((c = getopt(argc, argv, "a:cp:l:E:f:n:T:uU:vVD")) != -1)
+	while ((c = getopt(argc, argv, "a:cp:l:E:f:L:n:R:S:T:uU:vVD")) != -1)
 		switch(c) {
 			case 'a':
 				ind.ssb_adaptation_ind = atoi(optarg);
@@ -381,6 +414,15 @@ int main(int argc, char **argv)
 				break;
 			case 'f':
 				fragpoint = atoi(optarg);
+				break;
+			case 'L':
+				inet_pton(AF_INET, optarg, &srcAddr);
+				break;
+			case 'R':
+				rcvbufsize = atoi(optarg);
+				break;
+			case 'S':
+				sndbufsize = atoi(optarg);
 				break;
 			case 'T':
 				runtime = atoi(optarg);
@@ -453,6 +495,14 @@ int main(int argc, char **argv)
 					opt = argv[optind];
 					fragpoint = atoi(opt);
 					break;
+				case 'L':
+					if (++optind >= argc) {
+						printf("%s", Usage);
+						exit(1);
+					}
+					opt = argv[optind];
+					inet_pton(AF_INET, opt, &srcAddr);
+					break;
 				case 'U':
 					if (++optind >= argc) {
 						printf("%s", Usage);
@@ -468,6 +518,22 @@ int main(int argc, char **argv)
 					}
 					opt = argv[optind];
 					local_udp_port = atoi(opt);
+					break;
+				case 'R':
+					if (++optind >= argc) {
+						printf("%s", Usage);
+						exit(1);
+					}
+					opt = argv[optind];
+					rcvbufsize = atoi(opt);
+					break;
+				case 'S':
+					if (++optind >= argc) {
+						printf("%s", Usage);
+						exit(1);
+					}
+					opt = argv[optind];
+					sndbufsize = atoi(opt);
 					break;
 				case 'T':
 					if (++optind >= argc) {
@@ -514,42 +580,43 @@ int main(int argc, char **argv)
 	local_addr.sin_len = sizeof(struct sockaddr_in);
 #endif
 	local_addr.sin_port = htons(local_port);
-	local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	local_addr.sin_addr.s_addr = srcAddr;
 
 	usrsctp_init(local_udp_port, NULL, debug_printf);
 #ifdef SCTP_DEBUG
-	usrsctp_sysctl_set_sctp_debug_on(SCTP_DEBUG_NONE);
+	usrsctp_sysctl_set_sctp_debug_on(SCTP_DEBUG_ALL);
 #endif
 	usrsctp_sysctl_set_sctp_blackhole(2);
+	usrsctp_sysctl_set_sctp_enable_sack_immediately(1);
 
 	if (client) {
 		if (use_cb) {
-			if (!(psock = usrsctp_socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP, receive_cb, send_cb, length, NULL)) ){
-				printf("user_socket() returned NULL\n");
+			if (!(psock = usrsctp_socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP, client_receive_cb, send_cb, length, NULL))) {
+				perror("user_socket");
 				exit(1);
 			}
 		} else {
-			if (!(psock = usrsctp_socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP, NULL, NULL, 0, NULL)) ){
-				printf("user_socket() returned NULL\n");
+			if (!(psock = usrsctp_socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP, NULL, NULL, 0, NULL))) {
+				perror("user_socket");
 				exit(1);
 			}
 		}
 	} else {
 		if (use_cb) {
-			if (!(psock = usrsctp_socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP, receive_cb, NULL, 0, NULL)) ){
-				printf("user_socket() returned NULL\n");
+			if (!(psock = usrsctp_socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP, server_receive_cb, NULL, 0, NULL))) {
+				perror("user_socket");
 				exit(1);
 			}
 		} else {
-			if (!(psock = usrsctp_socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP, NULL, NULL, 0, NULL)) ){
-				printf("user_socket() returned NULL\n");
+			if (!(psock = usrsctp_socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP, NULL, NULL, 0, NULL))) {
+				perror("user_socket");
 				exit(1);
 			}
 		}
 	}
 
 	if (usrsctp_bind(psock, (struct sockaddr *)&local_addr, sizeof(struct sockaddr_in)) == -1) {
-		printf("usrsctp_bind failed.\n");
+		perror("usrsctp_bind");
 		exit(1);
 	}
 
@@ -558,8 +625,22 @@ int main(int argc, char **argv)
 	}
 
 	if (!client) {
+		if (rcvbufsize) {
+			if (usrsctp_setsockopt(psock, SOL_SOCKET, SO_RCVBUF, &rcvbufsize, sizeof(int)) < 0) {
+				perror("setsockopt: rcvbuf");
+			}
+		}
+		if (verbose) {
+			intlen = sizeof(int);
+			if (usrsctp_getsockopt(psock, SOL_SOCKET, SO_RCVBUF, &myrcvbufsize, (socklen_t *)&intlen) < 0) {
+				perror("getsockopt: rcvbuf");
+			} else {
+				fprintf(stdout,"Receive buffer size: %d.\n", myrcvbufsize);
+			}
+		}
+
 		if (usrsctp_listen(psock, 1) < 0) {
-			printf("usrsctp_listen failed.\n");
+			perror("usrsctp_listen");
 			exit(1);
 		}
 
@@ -570,7 +651,7 @@ int main(int argc, char **argv)
 				struct socket *conn_sock;
 
 				if ((conn_sock = usrsctp_accept(psock, (struct sockaddr *) &remote_addr, &addr_len))== NULL) {
-					printf("usrsctp_accept failed.  exiting...\n");
+					perror("usrsctp_accept");
 					continue;
 				}
 			} else {
@@ -578,17 +659,21 @@ int main(int argc, char **argv)
 
 				conn_sock = (struct socket **)malloc(sizeof(struct socket *));
 				if ((*conn_sock = usrsctp_accept(psock, (struct sockaddr *) &remote_addr, &addr_len))== NULL) {
-					printf("usrsctp_accept failed.  exiting...\n");
+					perror("usrsctp_accept");
 					continue;
 				}
 #ifdef _WIN32
-				tid = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)&handle_connection, (void *)conn_sock, 0, NULL);
+				tid = CreateThread(NULL, 0, &handle_connection, (void *)conn_sock, 0, NULL);
 #else
 				pthread_create(&tid, NULL, &handle_connection, (void *)conn_sock);
 #endif
 			}
-			if (verbose)
-				printf("Connection accepted from %s:%d\n", inet_ntoa(remote_addr.sin_addr), ntohs(remote_addr.sin_port));
+			if (verbose) {
+				// const char *inet_ntop(int af, const void *src, char *dst, socklen_t size)
+				//inet_ntoa(remote_addr.sin_addr)
+				char addrbuf[INET_ADDRSTRLEN];
+				printf("Connection accepted from %s:%d\n", inet_ntop(AF_INET, &(remote_addr.sin_addr), addrbuf, INET_ADDRSTRLEN), ntohs(remote_addr.sin_port));
+			}
 		}
 		usrsctp_close(psock);
 	} else {
@@ -603,7 +688,10 @@ int main(int argc, char **argv)
 #ifdef HAVE_SIN_LEN
 		remote_addr.sin_len = sizeof(struct sockaddr_in);
 #endif
-		remote_addr.sin_addr.s_addr = inet_addr(argv[optind]);
+		if (!inet_pton(AF_INET, argv[optind], &remote_addr.sin_addr.s_addr)){
+			printf("error: invalid destination address\n");
+			exit(1);
+		}
 		remote_addr.sin_port = htons(remote_port);
 
 		/* TODO fragpoint stuff */
@@ -617,22 +705,34 @@ int main(int argc, char **argv)
 		if (fragpoint) {
 			av.assoc_id = 0;
 			av.assoc_value = fragpoint;
-			if (usrsctp_setsockopt(psock, IPPROTO_SCTP, SCTP_MAXSEG, &av, sizeof(struct sctp_assoc_value)) < 0)
+			if (usrsctp_setsockopt(psock, IPPROTO_SCTP, SCTP_MAXSEG, &av, sizeof(struct sctp_assoc_value)) < 0) {
 				perror("setsockopt: SCTP_MAXSEG");
+			}
 		}
 
-		if (usrsctp_connect(psock, (struct sockaddr *) &remote_addr, sizeof(struct sockaddr_in)) == -1 ) {
-			printf("usrsctpconnect failed.  exiting...\n");
-			exit(1);
+		if (sndbufsize) {
+			if (usrsctp_setsockopt(psock, SOL_SOCKET, SO_SNDBUF, &sndbufsize, sizeof(int)) < 0) {
+				perror("setsockopt: sndbuf");
+			}
+		}
+		if (verbose) {
+			intlen = sizeof(int);
+			if (usrsctp_getsockopt(psock, SOL_SOCKET, SO_SNDBUF, &mysndbufsize, (socklen_t *)&intlen) < 0) {
+				perror("setsockopt: SO_SNDBUF");
+			} else {
+				fprintf(stdout,"Send buffer size: %d.\n", mysndbufsize);
+			}
 		}
 
 		buffer = malloc(length);
 		memset(buffer, 'b', length);
-		gettimeofday(&start_time, NULL);
-		if (verbose) {
-			printf("Start sending %ld messages...\n", (long)number_of_messages);
-			fflush(stdout);
+
+		if (usrsctp_connect(psock, (struct sockaddr *) &remote_addr, sizeof(struct sockaddr_in)) == -1 ) {
+			perror("usrsctp_connect");
+			exit(1);
 		}
+
+		gettimeofday(&start_time, NULL);
 
 		done = 0;
 
@@ -646,36 +746,7 @@ int main(int argc, char **argv)
 #endif
 		}
 
-		messages = 0;
-
-		sndinfo.snd_sid = 0;
-		sndinfo.snd_flags = 0;
-		if (unordered != 0) {
-			sndinfo.snd_flags |= SCTP_UNORDERED;
-		}
-		sndinfo.snd_ppid = 0;
-		sndinfo.snd_context = 0;
-		sndinfo.snd_assoc_id = 0;
-
-		/*
-		prinfo.pr_policy = SCTP_PR_SCTP_RTX;
-		prinfo.pr_value = 2;
-		spa.sendv_sndinfo = sndinfo;
-		spa.sendv_prinfo = prinfo;
-		spa.sendv_flags = SCTP_SEND_SNDINFO_VALID | SCTP_SEND_PRINFO_VALID;
-		*/
-
 		if (use_cb) {
-			if (very_verbose)
-				printf("Sending message number %lu.\n", messages);
-
-				if (usrsctp_sendv(psock, buffer, length, (struct sockaddr *) &remote_addr, 1,
-				                  (void *)&sndinfo, (socklen_t)sizeof(struct sctp_sndinfo), SCTP_SENDV_SNDINFO,
-				                  0) < 0) {
-				perror("usrctp_sendv returned < 0");
-				exit(1);
-			}
-			messages++;
 			while (!done && (messages < (number_of_messages - 1))) {
 #ifdef _WIN32
 				Sleep(1000);
@@ -684,33 +755,56 @@ int main(int argc, char **argv)
 #endif
 			}
 		} else {
+			sndinfo.snd_sid = 0;
+			sndinfo.snd_flags = 0;
+			if (unordered != 0) {
+				sndinfo.snd_flags |= SCTP_UNORDERED;
+			}
+			sndinfo.snd_ppid = 0;
+			sndinfo.snd_context = 0;
+			sndinfo.snd_assoc_id = 0;
+			if (verbose) {
+				printf("Start sending ");
+				if (number_of_messages > 0) {
+					printf("%ld messages ", (long)number_of_messages);
+				}
+				if (runtime > 0) {
+					printf("for %u seconds ...", runtime);
+				}
+				printf("\n");
+				fflush(stdout);
+			}
 			while (!done && ((number_of_messages == 0) || (messages < (number_of_messages - 1)))) {
-				if (very_verbose)
+				if (very_verbose) {
 					printf("Sending message number %lu.\n", messages + 1);
+				}
 
 				if (usrsctp_sendv(psock, buffer, length, (struct sockaddr *) &remote_addr, 1,
 				                  (void *)&sndinfo, (socklen_t)sizeof(struct sctp_sndinfo), SCTP_SENDV_SNDINFO,
 				                  0) < 0) {
-					perror("usrsctp_sendv returned < 0");
+					perror("usrsctp_sendv");
 					exit(1);
 				}
 				messages++;
 			}
-			if (very_verbose)
+			if (very_verbose) {
 				printf("Sending message number %lu.\n", messages + 1);
+			}
 
 			sndinfo.snd_flags |= SCTP_EOF;
 			if (usrsctp_sendv(psock, buffer, length, (struct sockaddr *) &remote_addr, 1,
 			                  (void *)&sndinfo, (socklen_t)sizeof(struct sctp_sndinfo), SCTP_SENDV_SNDINFO,
 			                  0) < 0) {
-				perror("final usrsctp_sendv returned\n");
+				perror("usrsctp_sendv");
 				exit(1);
 			}
 			messages++;
 		}
 		free (buffer);
-		if (verbose)
-			printf("done.\n");
+
+		if (verbose) {
+			printf("Closing socket.\n");
+		}
 
 		usrsctp_close(psock);
 		gettimeofday(&now, NULL);
