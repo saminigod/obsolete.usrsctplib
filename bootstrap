@@ -1,3 +1,4 @@
+#! /bin/sh
 #
 # Copyright (C) 2011-2012 Michael Tuexen
 #
@@ -28,6 +29,23 @@
 # SUCH DAMAGE.
 #
 
-SUBDIRS = usrsctplib programs
-EXTRA_DIST = bootstrap Makefile.nmake
-ACLOCAL_AMFLAGS = -I m4
+if [ -e /usr/bin/glibtoolize ] ; then
+    glibtoolize --force
+elif [ -e /usr/bin/libtoolize ] ; then
+    libtoolize --force
+elif [ -e /usr/local/bin/libtoolize ] ; then
+    libtoolize --force
+elif [ -e /usr/local/bin/glibtoolize ] ; then
+    glibtoolize --force
+else
+   echo "ERROR: I cannot find libtoolize or glibtoolize!"
+   exit 1
+fi
+
+if [ -e /usr/local/share/aclocal ] ; then
+   aclocal -I /usr/local/share/aclocal
+else
+   aclocal -I /usr/share/aclocal
+fi
+autoconf
+automake --foreign --add-missing --copy
